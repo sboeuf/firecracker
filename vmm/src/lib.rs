@@ -74,7 +74,7 @@ use kernel::loader as kernel_loader;
 use kvm::*;
 use logger::error::LoggerError;
 use logger::{AppInfo, Level, LogOption, Metric, LOGGER, METRICS};
-use memory_model::{GuestAddress, GuestMemory};
+use memory_model::{AddressRegionType, AddressSpace, GuestAddress, GuestMemory};
 use serde_json::Value;
 pub use sigsys_handler::setup_sigsys_handler;
 use sys_util::{register_signal_handler, EventFd, Terminal};
@@ -553,6 +553,7 @@ struct Vmm {
     shared_info: Arc<RwLock<InstanceInfo>>,
 
     // Guest VM core resources.
+    address_space: Option<AddressSpace>,
     guest_memory: Option<GuestMemory>,
     kernel_config: Option<KernelConfig>,
     vcpu_handles: Option<Vec<thread::JoinHandle<()>>>,
@@ -615,6 +616,7 @@ impl Vmm {
             kvm,
             vm_config: VmConfig::default(),
             shared_info: api_shared_info,
+            address_space: None,
             guest_memory: None,
             kernel_config: None,
             vcpu_handles: None,
@@ -848,9 +850,16 @@ impl Vmm {
                 memory_model::GuestMemoryError::MemoryNotInitialized,
             ))?
             << 20;
-        let arch_mem_regions = arch::arch_memory_regions(mem_size);
-        self.guest_memory =
-            Some(GuestMemory::new(&arch_mem_regions).map_err(StartMicrovmError::GuestMemory)?);
+
+        let address_space = arch::create_address_space(mem_size).map_err(|_| {
+            StartMicrovmError::GuestMemory(memory_model::GuestMemoryError::InvalidASOperation)
+        })?;
+        self.guest_memory = Some(
+            address_space
+                .map_guest_memory(&[AddressRegionType::DefaultMemory])
+                .map_err(|e| StartMicrovmError::GuestMemory(e))?,
+        );
+        self.address_space = Some(address_space);
         Ok(())
     }
 
