@@ -18,6 +18,7 @@ sys_util = { path = "../sys_util" }
 virtio_gen = { path = "../virtio_gen" }
 vhost_gen = { path = "../vhost_gen" , optional = true}
 vhost_backend = { path = "../vhost_backend", optional = true}
+vhost_user_backend = { path = "../vhost_user_backend"}
 
 [dev-dependencies]
 tempfile = ">=3.0.2"

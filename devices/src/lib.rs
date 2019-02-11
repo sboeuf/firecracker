@@ -18,6 +18,7 @@ extern crate net_gen;
 extern crate net_util;
 extern crate rate_limiter;
 extern crate sys_util;
+extern crate vhost_user_backend;
 #[cfg(feature = "vsock")]
 extern crate vhost_backend;
 #[cfg(feature = "vsock")]
