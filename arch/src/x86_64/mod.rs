@@ -13,9 +13,8 @@ pub mod regs;
 
 use std::mem;
 
-use super::HIMEM_START;
 use arch_gen::x86::bootparam::{boot_params, E820_RAM};
-use memory_model::{AddressRegionType, AddressSpace, GuestAddress, GuestMemory};
+use memory_model::{AddressSpace, GuestAddress, GuestMemory};
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
@@ -34,7 +33,7 @@ impl From<Error> for super::Error {
 }
 
 // Where BIOS/VGA magic would live on a real PC.
-const EBDA_START: usize = 0x9fc00;
+const EBDA_START: u64 = 0x9fc00;
 const FIRST_ADDR_PAST_32BITS: usize = (1 << 32);
 const MEM_32BIT_GAP_SIZE: usize = (768 << 20);
 
@@ -46,55 +45,25 @@ pub fn create_address_space(size: usize) -> Result<AddressSpace, Error> {
     let memory_gap_start = GuestAddress(FIRST_ADDR_PAST_32BITS - MEM_32BIT_GAP_SIZE);
     let memory_gap_end = GuestAddress(FIRST_ADDR_PAST_32BITS);
     let requested_memory_size = GuestAddress(size);
-    let mut address_space = AddressSpace::with_capacity(10);
-
-    fn add_memory(
-        address_space: &mut AddressSpace,
-        base: GuestAddress,
-        size: usize,
-    ) -> Result<usize, Error> {
-        address_space
-            .add_default_memory(base, size)
-            .map_err(|_| Error::AddressSpaceSetup)
-    };
-
-    // Guest memory is too small even no space for guest kernel
-    if requested_memory_size <= GuestAddress(HIMEM_START) {
-        return Err(Error::AddressSpaceSetup);
-    }
-
-    // Map memory below guest kernel, normal for boot info and BIOS
-    add_memory(&mut address_space, GuestAddress(0), EBDA_START)?;
-    address_space
-        .add_region(
-            AddressRegionType::BiosMemory,
-            GuestAddress(EBDA_START),
-            HIMEM_START - EBDA_START,
-            None,
-            0,
-        )
-        .map_err(|_| Error::AddressSpaceSetup)?;
+    let mut address_space = AddressSpace::with_capacity(1);
 
     // case1: guest memory fits before the gap
     if requested_memory_size <= memory_gap_start {
-        add_memory(
-            &mut address_space,
-            GuestAddress(HIMEM_START),
-            size - HIMEM_START,
-        )?;
+        address_space
+            .add_default_memory(GuestAddress(0), size)
+            .map_err(|_| Error::AddressSpaceSetup)?;
     // case2: guest memory extends beyond the gap
     } else {
         // push memory before the gap
-        add_memory(
-            &mut address_space,
-            GuestAddress(HIMEM_START),
-            memory_gap_start.offset() - HIMEM_START,
-        )?;
-        add_memory(
-            &mut address_space,
-            memory_gap_end,
-            requested_memory_size.offset_from(memory_gap_start),
-        )?;
+        address_space
+            .add_default_memory(GuestAddress(0), memory_gap_start.offset())
+            .map_err(|_| Error::AddressSpaceSetup)?;
+        address_space
+            .add_default_memory(
+                memory_gap_end,
+                requested_memory_size.offset_from(memory_gap_start),
+            )
+            .map_err(|_| Error::AddressSpaceSetup)?;
     }
 
     // Add address region for MMIO
@@ -114,13 +83,12 @@ pub fn get_32bit_gap_start() -> usize {
 ///
 /// # Arguments
 ///
-/// * `boot_mem` - The memory used to boot the guest.
+/// * `guest_mem` - The memory to be used by the guest.
 /// * `cmdline_addr` - Address in `guest_mem` where the kernel command line was loaded.
 /// * `cmdline_size` - Size of the kernel command line in bytes including the null terminator.
 /// * `num_cpus` - Number of virtual CPUs the guest will have.
 pub fn configure_system(
-    address_space: &AddressSpace,
-    boot_mem: &GuestMemory,
+    guest_mem: &GuestMemory,
     cmdline_addr: GuestAddress,
     cmdline_size: usize,
     num_cpus: u8,
@@ -129,9 +97,13 @@ pub fn configure_system(
     const KERNEL_HDR_MAGIC: u32 = 0x53726448;
     const KERNEL_LOADER_OTHER: u8 = 0xff;
     const KERNEL_MIN_ALIGNMENT_BYTES: u32 = 0x1000000; // Must be non-zero.
+    let first_addr_past_32bits = GuestAddress(FIRST_ADDR_PAST_32BITS);
+    let end_32bit_gap_start = GuestAddress(get_32bit_gap_start());
+
+    let himem_start = GuestAddress(super::HIMEM_START);
 
     // Note that this puts the mptable at the last 1k of Linux's 640k base RAM
-    mptable::setup_mptable(boot_mem, num_cpus).map_err(Error::MpTableSetup)?;
+    mptable::setup_mptable(guest_mem, num_cpus).map_err(Error::MpTableSetup)?;
 
     let mut params: boot_params = Default::default();
 
@@ -142,26 +114,38 @@ pub fn configure_system(
     params.hdr.cmdline_size = cmdline_size as u32;
     params.hdr.kernel_alignment = KERNEL_MIN_ALIGNMENT_BYTES;
 
-    address_space
-        .with_regions(|region| {
-            let ty = region.get_type();
-            if ty == AddressRegionType::DefaultMemory {
-                add_e820_entry(
-                    &mut params,
-                    region.get_base().offset() as u64,
-                    region.get_size() as u64,
-                    E820_RAM,
-                )?;
-            }
-            Ok(())
-        })
-        .map_err(|e: Error| e)?;
+    add_e820_entry(&mut params, 0, EBDA_START, E820_RAM)?;
+
+    let mem_end = guest_mem.end_addr();
+    if mem_end < end_32bit_gap_start {
+        add_e820_entry(
+            &mut params,
+            himem_start.offset() as u64,
+            mem_end.offset_from(himem_start) as u64,
+            E820_RAM,
+        )?;
+    } else {
+        add_e820_entry(
+            &mut params,
+            himem_start.offset() as u64,
+            end_32bit_gap_start.offset_from(himem_start) as u64,
+            E820_RAM,
+        )?;
+        if mem_end > first_addr_past_32bits {
+            add_e820_entry(
+                &mut params,
+                first_addr_past_32bits.offset() as u64,
+                mem_end.offset_from(first_addr_past_32bits) as u64,
+                E820_RAM,
+            )?;
+        }
+    }
 
     let zero_page_addr = GuestAddress(layout::ZERO_PAGE_START);
-    boot_mem
+    guest_mem
         .checked_offset(zero_page_addr, mem::size_of::<boot_params>())
         .ok_or(super::Error::ZeroPagePastRamEnd)?;
-    boot_mem
+    guest_mem
         .write_obj_at_addr(params, zero_page_addr)
         .map_err(|_| super::Error::ZeroPageSetup)?;
 
@@ -201,11 +185,7 @@ mod tests {
 
         let region = space.get_region(0).unwrap();
         assert_eq!(GuestAddress(0), region.get_base());
-        assert_eq!(EBDA_START, region.get_size());
-
-        let region = space.get_region(2).unwrap();
-        assert_eq!(GuestAddress(HIMEM_START), region.get_base());
-        assert_eq!((1usize << 29) - HIMEM_START, region.get_size());
+        assert_eq!(1usize << 29, region.get_size());
     }
 
     #[test]
@@ -215,7 +195,7 @@ mod tests {
 
         let region = space.get_region(0).unwrap();
         assert_eq!(GuestAddress(0), region.get_base());
-        let region = space.get_region(3).unwrap();
+        let region = space.get_region(1).unwrap();
         assert_eq!(GuestAddress(1usize << 32), region.get_base());
     }
 
@@ -230,25 +210,8 @@ mod tests {
     #[test]
     fn test_system_configuration() {
         let no_vcpus = 4;
-        let mem_types = [
-            AddressRegionType::DefaultMemory,
-            AddressRegionType::BiosMemory,
-        ];
-
-        // Too less memory
-        let mem_size = HIMEM_START;
-        match create_address_space(mem_size) {
-            Err(Error::AddressSpaceSetup) => {}
-            _ => panic!("should fail!"),
-        }
-
-        // Missing the BIOS memory area
-        let mem_size = 128 << 20;
-        let space = create_address_space(mem_size).unwrap();
-        let gm = space
-            .map_guest_memory(&[AddressRegionType::DefaultMemory])
-            .unwrap();
-        let config_err = configure_system(&space, &gm, GuestAddress(0), 0, 1);
+        let gm = GuestMemory::new(&vec![(GuestAddress(0), 0x10000)]).unwrap();
+        let config_err = configure_system(&gm, GuestAddress(0), 0, 1);
         assert!(config_err.is_err());
         assert_eq!(
             config_err.unwrap_err(),
@@ -257,36 +220,29 @@ mod tests {
             ))
         );
 
-        // Only the BIOS memory area
-        let mem_size = 128 << 20;
-        let space = create_address_space(mem_size).unwrap();
-        let gm = space
-            .map_guest_memory(&[AddressRegionType::BiosMemory])
-            .unwrap();
-        let config_err = configure_system(&space, &gm, GuestAddress(0), 0, 1);
-        assert!(config_err.is_err());
-        assert_eq!(
-            config_err.unwrap_err(),
-            super::super::Error::ZeroPagePastRamEnd
-        );
-
         // Now assigning some memory that falls before the 32bit memory hole.
         let mem_size = 128 << 20;
         let space = create_address_space(mem_size).unwrap();
-        let gm = space.map_guest_memory(&mem_types).unwrap();
-        configure_system(&space, &gm, GuestAddress(0), 0, no_vcpus).unwrap();
+        let gm = space
+            .map_guest_memory(&[AddressRegionType::DefaultMemory])
+            .unwrap();
+        configure_system(&gm, GuestAddress(0), 0, no_vcpus).unwrap();
 
         // Now assigning some memory that is equal to the start of the 32bit memory hole.
         let mem_size = 3328 << 20;
         let space = create_address_space(mem_size).unwrap();
-        let gm = space.map_guest_memory(&mem_types).unwrap();
-        configure_system(&space, &gm, GuestAddress(0), 0, no_vcpus).unwrap();
+        let gm = space
+            .map_guest_memory(&[AddressRegionType::DefaultMemory])
+            .unwrap();
+        configure_system(&gm, GuestAddress(0), 0, no_vcpus).unwrap();
 
         // Now assigning some memory that falls after the 32bit memory hole.
         let mem_size = 3330 << 20;
         let space = create_address_space(mem_size).unwrap();
-        let gm = space.map_guest_memory(&mem_types).unwrap();
-        configure_system(&space, &gm, GuestAddress(0), 0, no_vcpus).unwrap();
+        let gm = space
+            .map_guest_memory(&[AddressRegionType::DefaultMemory])
+            .unwrap();
+        configure_system(&gm, GuestAddress(0), 0, no_vcpus).unwrap();
     }
 
     #[test]
