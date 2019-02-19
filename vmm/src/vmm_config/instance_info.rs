@@ -60,6 +60,8 @@ pub enum StartMicrovmError {
     #[cfg(feature = "vsock")]
     /// Creating a vsock device can only fail if the /dev/vhost-vsock device cannot be open.
     CreateVsockDevice(devices::virtio::vhost::Error),
+    /// Creating a fs device fails if the vhost-user socket cannot be open.
+    CreateFsDevice(devices::virtio::vhost::Error),
     /// The device manager was not configured.
     DeviceManager,
     /// Executing a VM request failed.
@@ -91,6 +93,8 @@ pub enum StartMicrovmError {
     #[cfg(feature = "vsock")]
     /// Cannot initialize a MMIO Vsock Device or add a device to the MMIO Bus.
     RegisterVsockDevice(device_manager::mmio::Error),
+    /// Cannot initialize a MMIO Fs Device or add a device to the MMIO Bus.
+    RegisterFsDevice(device_manager::mmio::Error),
     /// Cannot build seccomp filters.
     SeccompFilters(seccomp::Error),
     /// Cannot create a new vCPU file descriptor.
@@ -131,6 +135,12 @@ impl Display for StartMicrovmError {
                 err_msg = err_msg.replace("\"", "");
 
                 write!(f, "Cannot create vsock device. {}", err_msg)
+            }
+            CreateFsDevice(ref err) => {
+                let mut err_msg = format!("{:?}", err);
+                err_msg = err_msg.replace("\"", "");
+
+                write!(f, "Cannot create Fs device. {}", err_msg)
             }
             CreateNetDevice(ref err) => {
                 let mut err_msg = format!("{:?}", err);
@@ -209,6 +219,16 @@ impl Display for StartMicrovmError {
                 write!(
                     f,
                     "Cannot initialize a MMIO Vsock Device or add a device to the MMIO Bus. {}",
+                    err_msg
+                )
+            }
+            RegisterFsDevice(ref err) => {
+                let mut err_msg = format!("{:?}", err);
+                err_msg = err_msg.replace("\"", "");
+
+                write!(
+                    f,
+                    "Cannot initialize a MMIO Fs Device or add a device to the MMIO Bus. {}",
                     err_msg
                 )
             }

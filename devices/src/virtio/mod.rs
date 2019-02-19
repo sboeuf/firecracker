@@ -21,6 +21,7 @@ pub use self::block::*;
 pub use self::mmio::*;
 pub use self::net::*;
 pub use self::queue::*;
+pub use self::vhost::fs::*;
 #[cfg(feature = "vsock")]
 pub use self::vhost::vsock::*;
 
