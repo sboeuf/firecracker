@@ -37,6 +37,12 @@ pub enum Error {
     InvalidASRegionType,
     /// Invalid operation for address space
     InvalidASOperation,
+    /// Cstring creation failed.
+    NewCstring(std::ffi::NulError),
+    /// Shared file creation failed.
+    MemFdCreation(nix::Error),
+    /// File not opened.
+    FileNotOpened(std::io::Error),
 }
 type Result<T> = result::Result<T, Error>;
 

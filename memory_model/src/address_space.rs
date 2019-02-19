@@ -4,15 +4,15 @@
 //! Represent the physical address space of a virtual machine, which is composed
 //! by address ranges for memory and memory-mapped IO areas.
 
-use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::{Arc, Mutex};
-
+extern crate nix;
 use guest_address::GuestAddress;
 use guest_memory::{Error, GuestMemory, MemoryRegion};
-use libc;
 use mmap::MemoryMapping;
-use std::fs::OpenOptions;
-use std::os::unix::fs::OpenOptionsExt;
+use std::ffi::CString;
+use std::fs::File;
+use std::os::unix::io::FromRawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::sync::{Arc, Mutex};
 
 /// Type of address regions.
 /// On physical machines, physical memory may have different properties, such as
@@ -207,13 +207,13 @@ impl AddressSpace {
     /// * `base` - Base address in VM to map content
     /// * `size` - Length of content to map
     pub fn add_default_memory(&mut self, base: GuestAddress, size: usize) -> Result<usize, Error> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(libc::O_TMPFILE)
-            .open("/dev/shm")
-            .unwrap();
-        file.set_len(size as u64).unwrap();
+        let filename = CString::new("shmem").map_err(Error::NewCstring)?;
+        let filename_ref = filename.as_c_str();
+        let file =
+            nix::sys::memfd::memfd_create(filename_ref, nix::sys::memfd::MemFdCreateFlag::empty())
+                .map_err(Error::MemFdCreation)?;
+        let file: File = unsafe { File::from_raw_fd(file) };
+        file.set_len(size as u64).map_err(Error::FileNotOpened)?;
         let fd = Arc::new(file);
         self.add_region(AddressRegionType::DefaultMemory, base, size, Some(fd), 0)
     }
