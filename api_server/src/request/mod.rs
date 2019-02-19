@@ -4,6 +4,7 @@
 pub mod actions;
 pub mod boot_source;
 pub mod drive;
+pub mod fs;
 pub mod logger;
 pub mod machine_configuration;
 pub mod net;

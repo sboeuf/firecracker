@@ -10,11 +10,25 @@
 use std;
 use std::io;
 
+use memory_model::GuestMemoryError;
+
+pub mod fs;
 pub mod handle;
 pub mod vsock;
 
 #[derive(Debug)]
 pub enum Error {
+    /// common
+
+    /// Invalid descriptor table address.
+    DescriptorTableAddress(GuestMemoryError),
+    /// Invalid used address.
+    UsedAddress(GuestMemoryError),
+    /// Invalid available address.
+    AvailAddress(GuestMemoryError),
+
+    /// vhost
+
     /// Creating kill eventfd failed.
     CreateKillEventFd(io::Error),
     /// Cloning kill eventfd failed.
@@ -51,7 +65,31 @@ pub enum Error {
     VhostIrqCreate(io::Error),
     /// Failed to read vhost eventfd.
     VhostIrqRead(io::Error),
+
+    /// vhost-user
+
+    /// Connection to socket failed.
+    VhostUserConnect(vhost_user_backend::Error),
+    /// Get features failed.
+    VhostUserGetFeatures(vhost_user_backend::Error),
+    /// Set owner failed.
+    VhostUserSetOwner(vhost_user_backend::Error),
+    /// Set features failed.
+    VhostUserSetFeatures(vhost_user_backend::Error),
+    /// Set mem table failed.
+    VhostUserSetMemTable(vhost_user_backend::Error),
+    /// Set vring num failed.
+    VhostUserSetVringNum(vhost_user_backend::Error),
+    /// Set vring addr failed.
+    VhostUserSetVringAddr(vhost_user_backend::Error),
+    /// Set vring base failed.
+    VhostUserSetVringBase(vhost_user_backend::Error),
+    /// Set vring call failed.
+    VhostUserSetVringCall(vhost_user_backend::Error),
+    /// Set vring kick failed.
+    VhostUserSetVringKick(vhost_user_backend::Error),
 }
 type Result<T> = std::result::Result<T, Error>;
 const INTERRUPT_STATUS_USED_RING: u32 = 0x1;
 const TYPE_VSOCK: u32 = 19;
+const TYPE_FS: u32 = 26;

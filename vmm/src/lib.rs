@@ -81,6 +81,7 @@ use sys_util::{register_signal_handler, EventFd, Terminal};
 use vm_control::VmResponse;
 use vmm_config::boot_source::{BootSourceConfig, BootSourceConfigError};
 use vmm_config::drive::{BlockDeviceConfig, BlockDeviceConfigs, DriveError};
+use vmm_config::fs::{FsDeviceConfig, FsDeviceConfigs, FsError};
 use vmm_config::instance_info::{InstanceInfo, InstanceState, StartMicrovmError};
 use vmm_config::logger::{LoggerConfig, LoggerConfigError, LoggerLevel};
 use vmm_config::machine_config::{VmConfig, VmConfigError};
@@ -204,6 +205,9 @@ pub enum VmmActionError {
     /// The action `insert_vsock_device` failed either because of bad user input (`ErrorKind::User`)
     /// or an internal error (`ErrorKind::Internal`).
     VsockConfig(ErrorKind, VsockError),
+    /// The action `insert_fs_device` failed either because of bad user input (`ErrorKind::User`)
+    /// or an internal error (`ErrorKind::Internal`).
+    FsConfig(ErrorKind, FsError),
 }
 
 impl VmmActionError {
@@ -219,6 +223,7 @@ impl VmmActionError {
             NetworkConfig(ref kind, _) => kind,
             StartMicrovm(ref kind, _) => kind,
             SendCtrlAltDel(ref kind, _) => kind,
+            FsConfig(ref kind, _) => kind,
             #[cfg(feature = "vsock")]
             VsockConfig(ref kind, _) => kind,
         }
@@ -237,6 +242,7 @@ impl Display for VmmActionError {
             NetworkConfig(_, ref err) => write!(f, "{}", err.to_string()),
             StartMicrovm(_, ref err) => write!(f, "{}", err.to_string()),
             SendCtrlAltDel(_, ref err) => write!(f, "{}", err.to_string()),
+            FsConfig(_, ref err) => write!(f, "{}", err.to_string()),
             #[cfg(feature = "vsock")]
             VsockConfig(_, ref err) => write!(f, "{}", err.to_string()),
         }
@@ -271,6 +277,10 @@ pub enum VmmAction {
     /// `VsockDeviceConfig` as input. This action can only be called before the microVM has
     /// booted. The response is sent using the `OutcomeSender`.
     InsertVsockDevice(VsockDeviceConfig, OutcomeSender),
+    /// Add a new fs device or update one that already exists using the
+    /// `FsDeviceConfig` as input. This action can only be called before the microVM has
+    /// booted. The response is sent using the `OutcomeSender`.
+    InsertFsDevice(FsDeviceConfig, OutcomeSender),
     /// Update the size of an existing block device specified by an ID. The ID is the first data
     /// associated with this enum variant. This action can only be called after the microVM is
     /// started. The response is sent using the `OutcomeSender`.
@@ -511,6 +521,11 @@ impl EpollContext {
         virtio::vhost::handle::VhostEpollConfig::new(dispatch_base, self.epoll_raw_fd, sender)
     }
 
+    fn allocate_virtio_fs_tokens(&mut self) -> virtio::vhost::fs::EpollConfig {
+        let (dispatch_base, sender) = self.allocate_tokens(virtio::vhost::fs::FS_EVENTS_COUNT);
+        virtio::vhost::fs::EpollConfig::new(dispatch_base, self.epoll_raw_fd, sender)
+    }
+
     fn get_device_handler(&mut self, device_idx: usize) -> Result<&mut EpollHandler> {
         let ref mut maybe = self.device_handlers[device_idx];
         match maybe.handler {
@@ -572,6 +587,7 @@ struct Vmm {
     network_interface_configs: NetworkInterfaceConfigs,
     #[cfg(feature = "vsock")]
     vsock_device_configs: VsockDeviceConfigs,
+    fs_device_configs: FsDeviceConfigs,
 
     epoll_context: EpollContext,
 
@@ -629,6 +645,7 @@ impl Vmm {
             network_interface_configs: NetworkInterfaceConfigs::new(),
             #[cfg(feature = "vsock")]
             vsock_device_configs: VsockDeviceConfigs::new(),
+            fs_device_configs: FsDeviceConfigs::new(),
             epoll_context,
             api_event,
             from_api,
@@ -813,6 +830,37 @@ impl Vmm {
         Ok(())
     }
 
+    fn attach_fs_devices(
+        &mut self,
+        device_manager: &mut MMIODeviceManager,
+        guest_mem: &GuestMemory,
+    ) -> std::result::Result<(), StartMicrovmError> {
+        let kernel_config = self
+            .kernel_config
+            .as_mut()
+            .ok_or(StartMicrovmError::MissingKernelConfig)?;
+
+        for cfg in self.fs_device_configs.iter() {
+            let epoll_config = self.epoll_context.allocate_virtio_fs_tokens();
+
+            let fs_box = Box::new(
+                devices::virtio::Fs::new(
+                    cfg.sock_path.clone(),
+                    cfg.tag.clone(),
+                    cfg.num_queues,
+                    cfg.queue_size,
+                    guest_mem,
+                    epoll_config,
+                )
+                .map_err(StartMicrovmError::CreateFsDevice)?,
+            );
+            device_manager
+                .register_device(fs_box, &mut kernel_config.cmdline, None)
+                .map_err(StartMicrovmError::RegisterFsDevice)?;
+        }
+        Ok(())
+    }
+
     fn configure_kernel(&mut self, kernel_config: KernelConfig) {
         self.kernel_config = Some(kernel_config);
     }
@@ -887,6 +935,7 @@ impl Vmm {
         self.attach_net_devices(&mut device_manager)?;
         #[cfg(feature = "vsock")]
         self.attach_vsock_devices(&mut device_manager, &guest_mem)?;
+        self.attach_fs_devices(&mut device_manager, &guest_mem)?;
 
         self.mmio_device_manager = Some(device_manager);
         Ok(())
@@ -1194,12 +1243,10 @@ impl Vmm {
 
         self.init_guest_memory()
             .map_err(|e| VmmActionError::StartMicrovm(ErrorKind::Internal, e))?;
-
         self.init_devices()
             .map_err(|e| VmmActionError::StartMicrovm(ErrorKind::Internal, e))?;
         self.init_microvm()
             .map_err(|e| VmmActionError::StartMicrovm(ErrorKind::Internal, e))?;
-
         let entry_addr = self
             .load_kernel()
             .map_err(|e| VmmActionError::StartMicrovm(ErrorKind::Internal, e))?;
@@ -1537,6 +1584,22 @@ impl Vmm {
             .map_err(|e| VmmActionError::VsockConfig(ErrorKind::User, e))
     }
 
+    fn insert_fs_device(
+        &mut self,
+        body: FsDeviceConfig,
+    ) -> std::result::Result<VmmData, VmmActionError> {
+        if self.is_instance_initialized() {
+            return Err(VmmActionError::FsConfig(
+                ErrorKind::User,
+                FsError::UpdateNotAllowedPostBoot,
+            ));
+        }
+        self.fs_device_configs
+            .add(body)
+            .map(|_| VmmData::Empty)
+            .map_err(|e| VmmActionError::FsConfig(ErrorKind::User, e))
+    }
+
     fn set_block_device_path(
         &mut self,
         drive_id: String,
@@ -1752,6 +1815,9 @@ impl Vmm {
             #[cfg(feature = "vsock")]
             VmmAction::InsertVsockDevice(vsock_cfg, sender) => {
                 Vmm::send_response(self.insert_vsock_device(vsock_cfg), sender);
+            }
+            VmmAction::InsertFsDevice(fs_cfg, sender) => {
+                Vmm::send_response(self.insert_fs_device(fs_cfg), sender);
             }
             VmmAction::RescanBlockDevice(drive_id, sender) => {
                 Vmm::send_response(self.rescan_block_device(&drive_id), sender);
