@@ -11,6 +11,7 @@
 use std;
 use std::io::{self, Read, Write};
 use std::os::unix::io::AsRawFd;
+use std::os::unix::io::RawFd;
 use std::ptr::null_mut;
 
 use libc;
@@ -40,8 +41,10 @@ type Result<T> = std::result::Result<T, Error>;
 /// Wraps a shared memory mapping in the current process.
 #[derive(Debug)]
 pub struct MemoryMapping {
-    addr: *mut u8,
-    size: usize,
+    pub addr: *mut u8,
+    pub size: usize,
+    pub offset: usize,
+    pub fd: RawFd,
 }
 
 // Send and Sync aren't automatically inherited for the raw address pointer.
@@ -72,9 +75,12 @@ impl MemoryMapping {
         if addr.is_null() {
             return Err(Error::SystemCallFailed(io::Error::last_os_error()));
         }
+
         Ok(MemoryMapping {
             addr: addr as *mut u8,
             size,
+            offset: 0,
+            fd: -1,
         })
     }
 
@@ -117,9 +123,12 @@ impl MemoryMapping {
         if addr.is_null() {
             return Err(Error::SystemCallFailed(io::Error::last_os_error()));
         }
+
         Ok(MemoryMapping {
             addr: addr as *mut u8,
             size,
+            offset,
+            fd: fd.as_raw_fd(),
         })
     }
 

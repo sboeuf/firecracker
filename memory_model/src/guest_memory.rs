@@ -42,9 +42,10 @@ type Result<T> = result::Result<T, Error>;
 
 /// Tracks a mapping of anonymous memory in the current process and the corresponding base address
 /// in the guest's memory space.
+#[derive(Debug)]
 pub struct MemoryRegion {
-    mapping: MemoryMapping,
-    guest_base: GuestAddress,
+    pub mapping: MemoryMapping,
+    pub guest_base: GuestAddress,
 }
 
 impl MemoryRegion {
@@ -66,9 +67,9 @@ fn region_end(region: &MemoryRegion) -> GuestAddress {
 }
 
 /// Tracks all memory regions allocated for the guest in the current process.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GuestMemory {
-    regions: Arc<Vec<MemoryRegion>>,
+    pub regions: Arc<Vec<MemoryRegion>>,
 }
 
 impl GuestMemory {
