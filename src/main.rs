@@ -92,7 +92,7 @@ fn main() {
     // integration test from test_unittests.py, an invalid syscall is issued, and we crash
     // otherwise.
     #[cfg(not(test))]
-    let mut seccomp_level = seccomp::SECCOMP_LEVEL_ADVANCED;
+    let mut seccomp_level = seccomp::SECCOMP_LEVEL_NONE;
     #[cfg(test)]
     let mut seccomp_level = seccomp::SECCOMP_LEVEL_NONE;
 
