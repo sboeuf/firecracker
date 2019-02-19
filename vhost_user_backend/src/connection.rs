@@ -174,9 +174,9 @@ impl Endpoint {
             }),
             IoVec::from_slice(unsafe { slice::from_raw_parts(payload.as_ptr() as *const u8, len) }),
         ];
-        let len = self.send_iovec(&iovs, fds)?;
+        let msg_len = self.send_iovec(&iovs, fds)?;
         let total = mem::size_of::<VhostUserMsgHeader>() + mem::size_of::<T>() + len;
-        if len != total {
+        if msg_len != total {
             return Err(Error::PartialMessage);
         }
         Ok(())
