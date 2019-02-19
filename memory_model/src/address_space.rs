@@ -9,7 +9,10 @@ use std::sync::{Arc, Mutex};
 
 use guest_address::GuestAddress;
 use guest_memory::{Error, GuestMemory, MemoryRegion};
+use libc;
 use mmap::MemoryMapping;
+use std::fs::OpenOptions;
+use std::os::unix::fs::OpenOptionsExt;
 
 /// Type of address regions.
 /// On physical machines, physical memory may have different properties, such as
@@ -204,7 +207,15 @@ impl AddressSpace {
     /// * `base` - Base address in VM to map content
     /// * `size` - Length of content to map
     pub fn add_default_memory(&mut self, base: GuestAddress, size: usize) -> Result<usize, Error> {
-        self.add_region(AddressRegionType::DefaultMemory, base, size, None, 0)
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_TMPFILE)
+            .open("/dev/shm")
+            .unwrap();
+        file.set_len(size as u64).unwrap();
+        let fd = Arc::new(file);
+        self.add_region(AddressRegionType::DefaultMemory, base, size, Some(fd), 0)
     }
 
     /// Create an address region for device MMIO.
