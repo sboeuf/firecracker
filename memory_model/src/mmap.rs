@@ -67,7 +67,7 @@ impl MemoryMapping {
                 null_mut(),
                 size,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_ANONYMOUS | libc::MAP_SHARED | libc::MAP_NORESERVE,
+                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
                 -1,
                 0,
             )
@@ -75,6 +75,8 @@ impl MemoryMapping {
         if addr.is_null() {
             return Err(Error::SystemCallFailed(io::Error::last_os_error()));
         }
+
+//	unsafe { libc::mprotect(addr, size, libc::PROT_NONE) };
 
         Ok(MemoryMapping {
             addr: addr as *mut u8,
@@ -129,6 +131,46 @@ impl MemoryMapping {
             size,
             offset,
             fd: fd.as_raw_fd(),
+        })
+    }
+
+    /// Maps the `size` bytes starting at `offset` bytes of the given `fd`.
+    ///
+    /// # Arguments
+    /// * `base` - Base address of the map.
+    /// * `fd` - File descriptor to mmap from.
+    /// * `size` - Size of memory region in bytes.
+    /// * `offset` - Offset in bytes from the beginning of `fd` to start the mmap.
+    pub fn from_fd_offset_fixed(base: *mut libc::c_void, fd: RawFd, size: usize, offset: usize) -> Result<MemoryMapping> {
+        if offset > libc::off_t::max_value() as usize {
+            return Err(Error::InvalidOffset);
+        }
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        if offset & (page_size - 1) != 0 {
+            return Err(Error::InvalidOffset);
+        }
+
+        // This is safe because we are creating a mapping in a place not already used by any other
+        // area in this process.
+        let addr = unsafe {
+            libc::mmap(
+                base,
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED | libc::MAP_FIXED,
+                fd,
+                offset as libc::off_t,
+            )
+        };
+        if addr.is_null() {
+            return Err(Error::SystemCallFailed(io::Error::last_os_error()));
+        }
+
+        Ok(MemoryMapping {
+            addr: addr as *mut u8,
+            size,
+            offset,
+            fd: fd,
         })
     }
 

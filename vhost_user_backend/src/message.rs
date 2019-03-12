@@ -26,6 +26,8 @@ pub const MAX_ATTECHED_FD_ENTRIES: usize = 32;
 pub const VHOST_USER_CONFIG_OFFSET: u32 = 0x100;
 pub const VHOST_USER_CONFIG_SIZE: u32 = 0x1000;
 
+pub const VHOST_USER_FS_SLAVE_ENTRIES: usize = 8;
+
 /// All request codes defined by the vhost-user protocol.
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -63,6 +65,22 @@ pub enum VhostUserRequestCode {
     POSTCOPY_END = 30,
     MAX_CMD = 31,
 }
+
+/// All request codes defined by the vhost-user protocol.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum VhostUserSlaveRequestCode {
+    SLAVE_NONE = 0,
+    SLAVE_IOTLB_MSG = 1,
+    SLAVE_CONFIG_CHANGE_MSG = 2,
+    SLAVE_VRING_HOST_NOTIFIER_MSG = 3,
+    SLAVE_FS_MAP = 4,
+    SLAVE_FS_UNMAP = 5,
+    SLAVE_FS_SYNC = 6,
+    SLAVE_MAX = 7,
+}
+
+
 
 impl VhostUserRequestCode {
     pub fn is_valid(&self) -> bool {
@@ -254,6 +272,17 @@ impl VhostUserMsgValidator for VhostUserMemory {
         true
     }
 }
+
+#[repr(packed)]
+#[derive(Default)]
+pub struct VhostUserFsSlaveMsg {
+    pub fd_off: [u64; VHOST_USER_FS_SLAVE_ENTRIES],
+    pub c_off: [u64; VHOST_USER_FS_SLAVE_ENTRIES],
+    pub len: [u64; VHOST_USER_FS_SLAVE_ENTRIES],
+    pub flags: [u64; VHOST_USER_FS_SLAVE_ENTRIES],
+}
+
+impl VhostUserMsgValidator for VhostUserFsSlaveMsg {}
 
 #[repr(packed)]
 #[derive(Default, Clone, Copy)]

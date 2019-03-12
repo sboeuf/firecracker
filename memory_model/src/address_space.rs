@@ -218,6 +218,15 @@ impl AddressSpace {
         self.add_region(AddressRegionType::DefaultMemory, base, size, Some(fd), 0)
     }
 
+    /// Create an address region mapping anonymous memory.
+    ///
+    /// # Arguments
+    /// * `base` - Base address in VM to map content
+    /// * `size` - Length of content to map
+    pub fn add_default_memory_no_fd(&mut self, base: GuestAddress, size: usize) -> Result<usize, Error> {
+        self.add_region(AddressRegionType::DefaultMemory, base, size, None, 0)
+    }
+
     /// Create an address region for device MMIO.
     ///
     /// # Arguments

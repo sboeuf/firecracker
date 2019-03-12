@@ -248,6 +248,9 @@ impl<S: VhostUserSlave> Slave<S> {
                     .set_vring_enable(msg.index, enable);
                 self.send_ack_message(&hdr, res)?;
             }
+//            VhostUserFsSlaveMsg::SET_SLAVE_REQ_FD => {
+//                let msg = self.extrack_msg_body::<VhostUserFsSlaveMsg>(&hdr, size, &buf)?;
+//            }
             VhostUserRequestCode::GET_CONFIG => {
                 if self.acked_protocol_features & VhostUserProtocolFeatures::CONFIG.bits() == 0 {
                     return Err(Error::InvalidOperation);

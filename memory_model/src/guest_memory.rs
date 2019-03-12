@@ -484,12 +484,14 @@ impl GuestMemory {
         F: FnOnce(&MemoryMapping, usize) -> Result<T>,
     {
         for region in self.regions.iter() {
-            if guest_addr >= region.guest_base && guest_addr < region_end(region) {
-                let offset = guest_addr.offset_from(region.guest_base);
-                if size <= region.mapping.size() - offset {
-                    return cb(&region.mapping, offset);
-                }
-                break;
+            if guest_addr >= region.guest_base {
+                if guest_addr < region_end(region) {
+                    let offset = guest_addr.offset_from(region.guest_base);
+                    if size <= region.mapping.size() - offset {
+                        return cb(&region.mapping, offset);
+                    }
+                    break;
+		}
             }
         }
         Err(Error::InvalidGuestAddressRange(guest_addr, size))

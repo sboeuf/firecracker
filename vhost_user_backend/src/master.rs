@@ -95,6 +95,11 @@ pub trait VhostUserMaster {
     /// disabled by VHOST_USER_SET_VRING_ENABLE with parameter 0.
     fn set_vring_enable(&mut self, index: u32, enable: bool) -> Result<()>;
 
+    /// Send slave the file descriptor it should use to send requests to the
+    /// master. VHOST_USER_SET_SLAVE_REQ_FD is the corresponding protocol
+    /// command.
+    fn set_slave_req_fd(&mut self, fd: Option<RawFd>) -> Result<()>;
+
     /// Fetch the contents of the virtio device configuration space.
     fn get_config(
         &mut self,
@@ -346,6 +351,22 @@ impl VhostUserMaster for Master {
         node.wait_for_ack(&hdr)
     }
 
+    fn set_slave_req_fd(&mut self, fd: Option<RawFd>) -> Result<()> {
+        // We unwrap() the return value to assert that we are not expecting
+        // threads to ever fail while holding the lock.
+        let mut node = self.node.lock().unwrap();
+
+        let mut fd_array = Vec::new();
+        let mut fds = None;
+        if let Some(rawfd) = fd {
+            fd_array.push(rawfd);
+            fds = Some(fd_array.as_slice());
+        }
+
+        let _ = node.send_header_with_fds(VhostUserRequestCode::SET_SLAVE_REQ_FD, fds)?;
+        Ok(())
+    }
+
     fn get_config(
         &mut self,
         offset: u32,
@@ -448,6 +469,16 @@ impl MasterInternal {
 
         let hdr = Self::new_request_header(code, 0);
         self.fd.send_header(&hdr, None)?;
+        Ok(hdr)
+    }
+
+    fn send_header_with_fds(&mut self, code: VhostUserRequestCode, fds: Option<&[RawFd]>) -> Result<VhostUserMsgHeader> {
+        if self.failed {
+            return Err(Error::AlreadyClosed);
+        }
+
+        let hdr = Self::new_request_header(code, 0);
+        self.fd.send_header(&hdr, fds)?;
         Ok(hdr)
     }
 

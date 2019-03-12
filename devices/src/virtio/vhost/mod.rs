@@ -88,6 +88,10 @@ pub enum Error {
     VhostUserSetVringCall(vhost_user_backend::Error),
     /// Set vring kick failed.
     VhostUserSetVringKick(vhost_user_backend::Error),
+    /// Set slave request fd failed.
+    VhostUserSetSlaveReqFd(vhost_user_backend::Error),
+    /// Failed to create vhost user eventfd.
+    VhostUserSlaveReqFdCreate(io::Error),
 }
 type Result<T> = std::result::Result<T, Error>;
 const INTERRUPT_STATUS_USED_RING: u32 = 0x1;

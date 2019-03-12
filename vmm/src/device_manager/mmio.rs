@@ -121,6 +121,17 @@ impl MMIODeviceManager {
             ));
         }
 
+        // Loop over the list of shm regions:
+	// - get the number of regions and their size
+	// - set the base for each region
+	// - insert memmap=4M$0x550000000 to the kernel_cmdline
+        {
+            let shm_sizes = mmio_device.shm_sizes();
+            for shm_size in shm_sizes.iter() {
+                
+            }
+        }
+
         self.bus
             .insert(Arc::new(Mutex::new(mmio_device)), self.mmio_base, MMIO_LEN)
             .map_err(|err| Error::BusError(err))?;

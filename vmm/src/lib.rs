@@ -842,6 +842,7 @@ impl Vmm {
 
         for cfg in self.fs_device_configs.iter() {
             let epoll_config = self.epoll_context.allocate_virtio_fs_tokens();
+            let epoll_config_vu = self.epoll_context.allocate_virtio_fs_tokens();
 
             let fs_box = Box::new(
                 devices::virtio::Fs::new(
@@ -849,14 +850,21 @@ impl Vmm {
                     cfg.tag.clone(),
                     cfg.num_queues,
                     cfg.queue_size,
+                    cfg.cache_size,
                     guest_mem,
                     epoll_config,
+                    epoll_config_vu,
                 )
                 .map_err(StartMicrovmError::CreateFsDevice)?,
             );
+
             device_manager
                 .register_device(fs_box, &mut kernel_config.cmdline, None)
                 .map_err(StartMicrovmError::RegisterFsDevice)?;
+
+//            kernel_config.cmdline
+//                .insert("memmap", "4M$0x550000000")
+//                .unwrap();
         }
         Ok(())
     }

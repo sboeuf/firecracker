@@ -24,6 +24,9 @@ const MMIO_MAGIC_VALUE: u32 = 0x74726976;
 //current version specified by the mmio standard (legacy devices used 1 here)
 const MMIO_VERSION: u32 = 2;
 
+//default empty array of shared memory sizes
+const DEFAULT_SHM_SIZES: &[u64] = &[];
+
 /// Trait for virtio devices to be driven by a virtio transport.
 ///
 /// The lifecycle of a virtio device is to be moved to a virtio transport, which will then query the
@@ -37,6 +40,11 @@ pub trait VirtioDevice: Send {
 
     /// The maximum size of each queue that this device supports.
     fn queue_max_sizes(&self) -> &[u16];
+
+    /// The shared memory size of each region that this device supports.
+    fn shm_sizes(&self) -> &[u64] {
+        DEFAULT_SHM_SIZES
+    }
 
     /// The set of feature bits shifted by `page * 32`.
     fn features(&self, page: u32) -> u32 {
@@ -91,6 +99,7 @@ pub struct MmioDevice {
     features_select: u32,
     acked_features_select: u32,
     queue_select: u32,
+    shm_select: u32,
     interrupt_status: Arc<AtomicUsize>,
     interrupt_evt: Option<EventFd>,
     driver_status: u32,
@@ -118,6 +127,7 @@ impl MmioDevice {
             features_select: 0,
             acked_features_select: 0,
             queue_select: 0,
+            shm_select: 0,
             interrupt_status: Arc::new(AtomicUsize::new(0)),
             interrupt_evt: Some(EventFd::new()?),
             driver_status: DEVICE_INIT,
@@ -126,6 +136,10 @@ impl MmioDevice {
             queue_evts: queue_evts,
             mem: Some(mem),
         })
+    }
+
+    pub fn shm_sizes(&self) -> &[u64] {
+        self.device.shm_sizes()
     }
 
     /// Gets the list of queue events that must be triggered whenever the VM writes to
@@ -296,6 +310,10 @@ impl BusDevice for MmioDevice {
                     0x60 => self.interrupt_status.load(Ordering::SeqCst) as u32,
                     0x70 => self.driver_status,
                     0xfc => self.config_generation,
+                    0xb0 => 0x400000u32,
+                    0xb4 => 0x0u32,
+                    0xb8 => 0x50000000u32,
+                    0xbc => 0x5u32,
                     _ => {
                         warn!("unknown virtio mmio register read: 0x{:x}", offset);
                         return;
@@ -358,6 +376,7 @@ impl BusDevice for MmioDevice {
                     0x94 => self.update_queue_field(|q| hi(&mut q.avail_ring, v)),
                     0xa0 => self.update_queue_field(|q| lo(&mut q.used_ring, v)),
                     0xa4 => self.update_queue_field(|q| hi(&mut q.used_ring, v)),
+                    0xac => self.shm_select = v,
                     _ => {
                         warn!("unknown virtio mmio register write: 0x{:x}", offset);
                         return;

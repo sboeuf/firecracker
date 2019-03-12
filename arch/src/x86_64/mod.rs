@@ -13,7 +13,7 @@ pub mod regs;
 
 use std::mem;
 
-use arch_gen::x86::bootparam::{boot_params, E820_RAM};
+use arch_gen::x86::bootparam::{boot_params, E820_RAM, E820_RESERVED};
 use memory_model::{AddressSpace, GuestAddress, GuestMemory};
 
 #[derive(Debug, PartialEq)]
@@ -45,7 +45,7 @@ pub fn create_address_space(size: usize) -> Result<AddressSpace, Error> {
     let memory_gap_start = GuestAddress(FIRST_ADDR_PAST_32BITS - MEM_32BIT_GAP_SIZE);
     let memory_gap_end = GuestAddress(FIRST_ADDR_PAST_32BITS);
     let requested_memory_size = GuestAddress(size);
-    let mut address_space = AddressSpace::with_capacity(1);
+    let mut address_space = AddressSpace::with_capacity(10);
 
     // case1: guest memory fits before the gap
     if requested_memory_size <= memory_gap_start {
@@ -69,6 +69,11 @@ pub fn create_address_space(size: usize) -> Result<AddressSpace, Error> {
     // Add address region for MMIO
     address_space
         .add_device_memory(memory_gap_start, memory_gap_end.offset_from(memory_gap_start))
+        .map_err(|_| Error::AddressSpaceSetup)?;
+
+    // Add address region for shared mem
+    address_space
+        .add_default_memory_no_fd(GuestAddress(0x550000000), 0x400000)
         .map_err(|_| Error::AddressSpaceSetup)?;
 
     Ok(address_space)
@@ -116,7 +121,8 @@ pub fn configure_system(
 
     add_e820_entry(&mut params, 0, EBDA_START, E820_RAM)?;
 
-    let mem_end = guest_mem.end_addr();
+//    let mem_end = guest_mem.end_addr();
+    let mem_end = GuestAddress(0x7ffffff);
     if mem_end < end_32bit_gap_start {
         add_e820_entry(
             &mut params,
@@ -140,6 +146,13 @@ pub fn configure_system(
             )?;
         }
     }
+
+    add_e820_entry(
+        &mut params,
+        0x550000000u64,
+        0x400000u64,
+        E820_RESERVED,
+    )?;
 
     let zero_page_addr = GuestAddress(layout::ZERO_PAGE_START);
     guest_mem

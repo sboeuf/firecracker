@@ -4,6 +4,8 @@
 use super::super::super::Error as DeviceError;
 use super::super::{ActivateError, ActivateResult, Queue, VirtioDevice};
 use memory_model::GuestMemory;
+use memory_model::MemoryMapping;
+use memory_model::GuestAddress;
 use std::cmp;
 use std::io::Write;
 use std::mem::transmute;
@@ -13,13 +15,25 @@ use std::sync::{mpsc, Arc};
 use sys_util::EventFd;
 use vhost_user_backend::message::VhostUserMemoryRegion;
 use vhost_user_backend::message::VhostUserVringAddrFlags;
+use vhost_user_backend::message::VhostUserRequestCode;
+use vhost_user_backend::message::VhostUserFsSlaveMsg;
 use vhost_user_backend::Master;
 use vhost_user_backend::UserMemoryContext;
 use vhost_user_backend::VhostUserMaster;
+use vhost_user_backend::Endpoint;
 use virtio::vhost::*;
 use DeviceEventT;
 use EpollHandler;
 use EpollHandlerPayload;
+use nix::sys::socket::{socketpair, AddressFamily, SockType, SockFlag};
+use std::os::unix::net::UnixStream;
+use std::os::unix::io::FromRawFd;
+use std::io::Read;
+use std::fs::File;
+
+use std::fs::OpenOptions;
+use std::os::unix::fs::OpenOptionsExt;
+
 
 const CONFIG_SPACE_TAG_SIZE: usize = 36;
 const CONFIG_SPACE_NUM_QUEUES_SIZE: usize = 4;
@@ -85,15 +99,143 @@ impl EpollHandler for FsEpollHandler {
     }
 }
 
+pub struct VhostUserEpollHandler {
+    endp: Endpoint,
+    mem: GuestMemory,
+    desc_table: Vec<MemoryMapping>,
+}
+
+impl EpollHandler for VhostUserEpollHandler {
+    fn handle_event(
+        &mut self,
+        device_event: DeviceEventT,
+        _: u32,
+        _: EpollHandlerPayload,
+    ) -> std::result::Result<(), DeviceError> {
+        match device_event {
+            0 => {
+                println!("###SEB 1 VhostUserEpollHandler event received!");
+                let (hdr, rfds) = self.endp.recv_header().unwrap();
+                let mut size = 0;
+
+                let buf = match hdr.get_size() {
+                    0 => vec![0u8; 0],
+                    len => {
+                        let (size2, rbuf, _) = self.endp.recv_into_buf::<[RawFd; 0]>(len as usize).unwrap();
+                        size = size2;
+                        rbuf
+                    }
+                };
+
+                let msg = unsafe { &*(buf.as_ptr() as *const VhostUserFsSlaveMsg) };
+
+                match hdr.get_code() {
+                    /// SLAVE_FS_MAP
+                    VhostUserRequestCode::RESET_OWNER => {
+                        println!("###SEB VhostUserEpollHandler(): SLAVE_FS_MAP");
+			for i in 0..8 {
+			    if msg.len[i] == 0 {
+				continue;
+			    }
+
+			    let base = 0x550000000u64 + msg.c_off[i];
+
+			    println!("###SEB 1 VhostUserEpollHandler(): base {} to map", base);
+
+			    let base = self
+                                          .mem
+                                          .get_host_address(GuestAddress(base as usize))
+                                          .unwrap();
+			    let base: *mut u8 = base.clone() as *mut u8;
+
+			    println!("###SEB 2 VhostUserEpollHandler(): base {:?} to map", base);
+
+			    for fd in rfds.iter() {
+				println!("###SEB 2.5 VhostUserEpollHandler(): fd {:?}", fd);
+			    }
+
+			    println!("###SEB 2.6 VhostUserEpollHandler(): flags {:?}", msg.flags[i]);
+
+			    if let Some(fds) = rfds.clone() {
+				println!("###SEB 3 VhostUserEpollHandler(): base {:?} to map", base);
+
+//				{
+//				let file = OpenOptions::new()
+//							.read(true)
+//							.write(true)
+//							.open("file_to_map")
+//							.unwrap();
+                                {
+			        let mapping = MemoryMapping::from_fd_offset_fixed(base as *mut libc::c_void, fds[0], msg.len[i] as usize, msg.fd_off[i] as usize).unwrap();
+				println!("###SEB 3.1 VhostUserEpollHandler(): mapping {:?}", mapping);
+				self.desc_table.push(mapping);
+                                }
+				println!("###SEB 3.2 VhostUserEpollHandler()");
+				unsafe { libc::close(fds[0]) };
+//                                }
+
+
+/*
+//				let mut file = unsafe{ File::from_raw_fd(fds[0]) };
+//				let mut buffer = Vec::new();
+//				file.read_to_end(&mut buffer).unwrap();
+//				println!("###SEB 3.5 VhostUserEpollHandler() buffer{:?}", buffer);
+				unsafe {
+				    // It is safe to overwrite the volatile memory. Accessing the guest
+				    // memory as a mutable slice is OK because nothing assumes another
+				    // thread won't change what is loaded.
+                                    let ptr = std::slice::from_raw_parts_mut(base, msg.len[i] as usize);
+//				    ptr[0] = 1;
+//                                    ptr[1] = 3;
+//                                    ptr[2] = 5;
+				    let dst = &mut ptr[0..30];
+//				    file.read_exact(dst).unwrap();
+				    println!("###SEB 3.2 VhostUserEpollHandler(): dst {:?}", dst);
+				}
+*/
+				println!("###SEB 3.5 VhostUserEpollHandler(): msg_len {:?}", msg.len[i]);
+                            }
+
+			    println!("###SEB 4 VhostUserEpollHandler(): base {:?} to map", base);
+			}
+                    }
+                    /// SLAVE_FS_UNMAP
+                    VhostUserRequestCode::SET_MEM_TABLE => {
+                        println!("###SEB VhostUserEpollHandler(): SLAVE_FS_UNMAP");
+                    }
+                    /// SLAVE_FS_SYNC
+                    VhostUserRequestCode::SET_LOG_BASE => {
+                        println!("###SEB VhostUserEpollHandler(): SLAVE_FS_SYNC");
+                    }
+                    _ => return Err(DeviceError::UnknownEvent {
+                            device: "VhostUserEpollHandler",
+                            event: 0,
+                        }),
+                }
+
+                Ok(())
+            }
+            other => Err(DeviceError::UnknownEvent {
+                device: "VhostUserEpollHandler",
+                event: other,
+            }),
+        }
+    }
+}
+
 pub struct Fs {
     vu: Master,
     queue_sizes: Vec<u16>,
+    shm_sizes: Vec<u64>,
     avail_features: u64,
     acked_features: u64,
     config_space: Vec<u8>,
     epoll_config: EpollConfig,
+    epoll_config_vu: EpollConfig,
     mem: GuestMemory,
     interrupt: Option<EventFd>,
+    sl_req_fd: Option<RawFd>,
+    sl_req_fd2: Option<RawFd>,
 }
 
 impl Fs {
@@ -103,8 +245,10 @@ impl Fs {
         tag: String,
         req_num_queues: usize,
         queue_size: u16,
+        cache_size: usize,
         mem: &GuestMemory,
         epoll_config: EpollConfig,
+        epoll_config_vu : EpollConfig,
     ) -> Result<Fs> {
         // Calculate the actual number of queues needed.
         let num_queues = NUM_QUEUE_OFFSET + req_num_queues;
@@ -112,6 +256,9 @@ impl Fs {
         let mut master = Master::new(&path, num_queues as u64).map_err(Error::VhostUserConnect)?;
         // Retrieve available features only when connecting the first time.
         let avail_features = master.get_features().map_err(Error::VhostUserGetFeatures)?;
+
+        // Check for VHOST_USER_PROTOCOL_F_SLAVE_REQ bit support
+	
         // Create virtio device config space.
         // First by adding the tag.
         let mut config_space = tag.into_bytes();
@@ -121,15 +268,22 @@ impl Fs {
         num_queues_slice.reverse();
         config_space[CONFIG_SPACE_TAG_SIZE..CONFIG_SPACE_SIZE].copy_from_slice(&num_queues_slice);
 
+        // Create socket pair for vhost user slave requests
+        let (fd1, fd2) = socketpair(AddressFamily::Unix, SockType::Stream, None, SockFlag::empty()).unwrap();
+
         Ok(Fs {
             vu: master,
             queue_sizes: vec![queue_size; num_queues],
+            shm_sizes: vec![cache_size as u64; 1],
             avail_features,
             acked_features: 0u64,
             config_space,
             epoll_config,
+            epoll_config_vu,
             mem: mem.clone(),
             interrupt: Some(EventFd::new().map_err(Error::VhostIrqCreate)?),
+            sl_req_fd: Some(fd1),
+            sl_req_fd2: Some(fd2),
         })
     }
 }
@@ -141,6 +295,10 @@ impl VirtioDevice for Fs {
 
     fn queue_max_sizes(&self) -> &[u16] {
         &self.queue_sizes.as_slice()
+    }
+
+    fn shm_sizes(&self) -> &[u64] {
+        &self.shm_sizes.as_slice()
     }
 
     fn features(&self, page: u32) -> u32 {
@@ -226,11 +384,49 @@ impl VirtioDevice for Fs {
 
         // Set backend features.
         self.vu
-            .set_features(self.acked_features)
+            .set_features(self.acked_features | 0x400)
             .map_err(Error::VhostUserSetFeatures)?;
+
+        // TODO: Set the protocol features.
+
+        // Set slave's request file descriptor.
+        if let Some(sl_req_fd) = self.sl_req_fd.take() {
+            if let Some(sl_req_fd2) = self.sl_req_fd2.take() {
+		self.vu
+		    .set_slave_req_fd(Some(sl_req_fd2))
+		    .map_err(Error::VhostUserSetSlaveReqFd)?;
+
+		let sl_req_evt_raw_fd = sl_req_fd.clone();
+		let stream = unsafe{ UnixStream::from_raw_fd(sl_req_fd) };
+
+		let handler = VhostUserEpollHandler {
+		    endp: Endpoint::new_slave(stream),
+                    mem: self.mem.clone(),
+		    desc_table: Vec::new(),
+		};
+
+		//channel should be open and working
+		self.epoll_config_vu
+		    .sender
+		    .send(Box::new(handler))
+	            .expect("Failed to send through the channel");
+
+		epoll::ctl(
+		    self.epoll_config_vu.epoll_raw_fd,
+		    epoll::ControlOptions::EPOLL_CTL_ADD,
+		    sl_req_evt_raw_fd,
+		    epoll::Event::new(epoll::Events::EPOLLIN, self.epoll_config_vu.first_token),
+		)
+		.map_err(ActivateError::EpollCtl)?;
+            }
+        }
 
         let mut mem_ctx = UserMemoryContext::new();
         for region in self.mem.regions.iter() {
+            if region.mapping.fd == -1 {
+                continue;
+            }
+
             let vu_mem_reg = VhostUserMemoryRegion {
                 guest_phys_addr: region.guest_base.offset() as u64,
                 memory_size: region.mapping.size as u64,

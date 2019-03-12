@@ -140,6 +140,7 @@ pub fn load_cmdline(
         return Err(Error::CommandLineOverflow)?;
     }
 
+    println!("load_cmdline guest_addr");
     guest_mem
         .write_slice_at_addr(cmdline.to_bytes_with_nul(), guest_addr)
         .map_err(|_| Error::CommandLineCopy)?;

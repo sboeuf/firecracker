@@ -17,6 +17,8 @@ pub struct FsDeviceConfig {
     pub num_queues: usize,
     /// Size of each virtqueue.
     pub queue_size: u16,
+    /// Size of the shared memory cache.
+    pub cache_size: usize,
 }
 
 /// Errors associated with `FsDeviceConfig`.

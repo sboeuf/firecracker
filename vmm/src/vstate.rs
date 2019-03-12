@@ -103,7 +103,7 @@ impl Vm {
             return Err(Error::NotEnoughMemorySlots);
         }
         guest_mem.with_regions(|index, guest_addr, size, host_addr| {
-            info!("Guest memory starts at {:x?}", host_addr);
+            println!("Guest memory starts at {:x?}", host_addr);
 
             let flags = if LOGGER.flags() & LogOption::LogDirtyPages as usize > 0 {
                 KVM_MEM_LOG_DIRTY_PAGES
